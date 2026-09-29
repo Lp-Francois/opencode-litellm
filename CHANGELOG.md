@@ -5,13 +5,6 @@
 
 * discover LiteLLM providers registered after plugin setup ([#35](https://github.com/yuseferi/opencode-litellm/issues/35)) ([555e302](https://github.com/yuseferi/opencode-litellm/commit/555e302d9dbbdc980d32736368b65237f74ffb5d)), closes [#1](https://github.com/yuseferi/opencode-litellm/issues/1) [#2](https://github.com/yuseferi/opencode-litellm/issues/2)
 
-## [1.4.1](https://github.com/yuseferi/opencode-litellm/compare/v1.4.0...v1.4.1) (2026-09-29)
-
-
-### Bug Fixes
-
-* discover LiteLLM providers registered after plugin setup ([#35](https://github.com/yuseferi/opencode-litellm/issues/35)) ([555e302](https://github.com/yuseferi/opencode-litellm/commit/555e302d9dbbdc980d32736368b65237f74ffb5d)), closes [#1](https://github.com/yuseferi/opencode-litellm/issues/1) [#2](https://github.com/yuseferi/opencode-litellm/issues/2)
-
 # [1.4.0](https://github.com/yuseferi/opencode-litellm/compare/v1.3.0...v1.4.0) (2026-09-29)
 
 
