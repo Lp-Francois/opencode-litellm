@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/yuseferi/opencode-litellm/compare/v1.3.0...v1.4.0) (2026-09-29)
+
+
+### Features
+
+* OpenCode 2 plugin API support ([#32](https://github.com/yuseferi/opencode-litellm/issues/32)) ([6215ca7](https://github.com/yuseferi/opencode-litellm/commit/6215ca7bb6652916cbece81953d500ee2bbf7e43))
+
 # [1.3.0](https://github.com/yuseferi/opencode-litellm/compare/v1.2.0...v1.3.0) (2026-09-23)
 
 
