@@ -43,6 +43,23 @@ interface ProviderSource {
   customHeaders?: Record<string, string>
   credentialReloadRequired: boolean
   refreshRequired: boolean
+  /**
+   * True when this source came from option/env/port auto-detection rather than
+   * a host-registered provider. A fallback only stands in until the real
+   * provider appears; reconcile replaces it at that point so the user's
+   * `providers.<id>.settings.baseURL` wins over the guessed endpoint.
+   *
+   * Distinct from {@link pendingPublication}: a fallback source is always
+   * pending until a configured provider supersedes it, whereas a configured
+   * source is pending only until its first successful `reload()`.
+   */
+  fromFallback: boolean
+  /**
+   * True until this source has been published to the provider registry by a
+   * successful `reload()`. Reconciliation retries (and re-adds) any source
+   * still pending, so a transient reload failure does not strand it.
+   */
+  pendingPublication: boolean
   filters: ModelFilters
   capabilities: ModelCapabilities
   formatModelNames: boolean
@@ -285,6 +302,8 @@ async function makeProviderSource(
     usesConnectionCredential,
     credentialReloadRequired: false,
     refreshRequired: false,
+    fromFallback: provider === undefined,
+    pendingPublication: true,
     baseURL,
     apiKey,
     customHeaders: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
@@ -414,41 +433,83 @@ async function refreshProviderSources(
   await Promise.all(sources.map((source) => refreshProviderSource(context, source, inFlight)))
 }
 
+/**
+ * LiteLLM-shaped providers the host currently exposes.
+ *
+ * OpenCode 2 registers user-configured providers *after* plugin setup, so the
+ * list has to be re-read on later `provider.updated` events instead of being
+ * trusted once at startup. Otherwise a `providers.litellm.settings.baseURL`
+ * config is invisible to the plugin and discovery silently falls back to
+ * auto-detection.
+ */
+async function listMatchingProviders(context: Context): Promise<ProviderInfo[]> {
+  try {
+    const providers = (await context.provider.list()).data
+    return providers.filter((provider) =>
+      isLiteLLMProvider(provider.id, asRecord(provider.settings)),
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logInfo(`[opencode-litellm] Could not read configured providers: ${message}`)
+    return []
+  }
+}
+
+/**
+ * Discover and add sources for LiteLLM providers that have appeared since the
+ * last reconciliation. Ids already present are left untouched *unless* the
+ * existing entry is a fallback that never came from a host-registered
+ * provider — in that case it is replaced, so merging a late provider overrides
+ * the option/env/auto-detected endpoint (including its baseURL and
+ * credentials). Safe to call repeatedly (startup, `provider.updated`,
+ * `session.created`). Returns sources that still need publishing via
+ * `reload()` (new providers plus any whose previous publication failed).
+ */
+async function reconcileProviderSources(
+  context: Context,
+  pluginOptions: Record<string, unknown>,
+  sources: Map<string, ProviderSource>,
+): Promise<ProviderSource[]> {
+  const changed: ProviderSource[] = []
+  for (const provider of await listMatchingProviders(context)) {
+    const existing = sources.get(provider.id)
+    // Skip sources that are both configured (not a fallback) and already
+    // published; a pending configured source must be returned so it is retried.
+    if (existing && !existing.fromFallback && !existing.pendingPublication) continue
+    const source = await makeProviderSource(context, provider, pluginOptions)
+    if (!source) continue
+    sources.set(source.id, source)
+    changed.push(source)
+  }
+  return changed
+}
+
 const definition = Plugin.define({
   id: 'opencode-litellm',
   async setup(context) {
     initV2Logging()
 
     const pluginOptions = asRecord(context.options)
-    let providers: ProviderInfo[] = []
-    try {
-      providers = (await context.provider.list()).data
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      logInfo(`[opencode-litellm] Could not read configured providers: ${message}`)
+    const sources = new Map<string, ProviderSource>()
+
+    // First pass. On OpenCode 2 the host has not registered user-configured
+    // providers yet, so this typically finds only built-ins; the event loop
+    // below reconciles again when they appear.
+    await reconcileProviderSources(context, pluginOptions, sources)
+    // With no configured provider, fall back to purely option/env-driven
+    // discovery so `LITELLM_BASE_URL` and plugin options keep working.
+    if (sources.size === 0) {
+      const fallback = await makeProviderSource(context, undefined, pluginOptions)
+      if (fallback) sources.set(fallback.id, fallback)
     }
-
-    const matchingProviders = providers.filter((provider) =>
-      isLiteLLMProvider(provider.id, asRecord(provider.settings)),
-    )
-    const candidates: Array<ProviderInfo | undefined> = matchingProviders.length
-      ? matchingProviders
-      : [undefined]
-    const sources: ProviderSource[] = []
-
-    for (const candidate of candidates) {
-      const source = await makeProviderSource(context, candidate, pluginOptions)
-      if (source) sources.push(source)
-    }
-
-    if (sources.length === 0) {
+    if (sources.size === 0) {
       logInfo(
         '[opencode-litellm] No LiteLLM proxy found. Configure providers.litellm.settings.baseURL or start LiteLLM on port 4000/8000/8080.',
       )
     }
 
     const providerRegistration = await context.provider.transform((editor) => {
-      for (const source of sources) {
+      for (const source of sources.values()) {
         const current = editor.get(source.id)
         if (current) {
           editor.update(source.id, (provider) => {
@@ -488,16 +549,79 @@ const definition = Plugin.define({
           })
         }
       }
+      // The initial transform is itself the publication step for sources built
+      // during setup, so they are no longer "pending" after this point.
+      for (const source of sources.values()) source.pendingPublication = false
     })
 
     const controller = new AbortController()
     const inFlight = new Map<string, Promise<void>>()
+
+    // Reconciliation is kicked off from the event loop, which must not block on
+    // discovery. Overlapping triggers are folded into one follow-up pass, so a
+    // provider that shows up mid-discovery is neither missed nor discovered
+    // twice.
+    let reconcileRunning: Promise<void> | null = null
+    let reconcileAgain = false
+
+    const reconcileOnce = async (): Promise<void> => {
+      // A newly built source is only "published" once `reload()` succeeds. Until
+      // then it stays `pendingPublication`, so the next pass returns and retries
+      // it instead of skipping it forever after a transient reload failure.
+      let pending: ProviderSource[]
+      try {
+        pending = await reconcileProviderSources(context, pluginOptions, sources)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logInfo(`[opencode-litellm] Could not reconcile configured providers: ${message}`)
+        return
+      }
+      if (pending.length === 0) return
+      try {
+        await context.provider.reload()
+        for (const source of pending) source.pendingPublication = false
+        logInfo(
+          `[opencode-litellm] Registered ${pending.length} newly configured LiteLLM provider(s).`,
+        )
+      } catch (error) {
+        // Leave `pendingPublication` set so the next trigger retries instead of
+        // treating these sources as already published.
+        const message = error instanceof Error ? error.message : String(error)
+        logInfo(
+          `[opencode-litellm] Could not reload providers after discovering a new provider; will retry: ${message}`,
+        )
+      }
+    }
+
+    const reconcileAndReload = async (): Promise<void> => {
+      if (reconcileRunning) {
+        reconcileAgain = true
+        return reconcileRunning
+      }
+      reconcileRunning = (async () => {
+        do {
+          reconcileAgain = false
+          await reconcileOnce()
+        } while (reconcileAgain)
+      })().finally(() => {
+        reconcileRunning = null
+        // A trigger can land in the gap between the loop's final check and this
+        // continuation. Without re-checking, that update would be dropped.
+        if (reconcileAgain) void reconcileAndReload()
+      })
+      return reconcileRunning
+    }
+
     void (async () => {
       try {
         for await (const event of context.event.subscribe({ signal: controller.signal })) {
+          if (event.type === 'provider.updated') {
+            void reconcileAndReload()
+            continue
+          }
           if (event.type === 'credential.switched') {
             const changedSources = (await Promise.all(
-              sources
+              [...sources.values()]
                 .filter((source) => source.integrationID === event.data.integrationID)
                 .map(async (source) =>
                   (await refreshConnectionCredential(context, source)) ? source : undefined,
@@ -513,7 +637,10 @@ const definition = Plugin.define({
             continue
           }
           if (event.type !== 'session.created') continue
-          void refreshProviderSources(context, sources, inFlight)
+          void (async () => {
+            await reconcileAndReload()
+            await refreshProviderSources(context, [...sources.values()], inFlight)
+          })()
         }
       } catch (error) {
         if (controller.signal.aborted) return
@@ -521,6 +648,12 @@ const definition = Plugin.define({
         logInfo(`[opencode-litellm] Event subscription failed: ${message}`)
       }
     })()
+
+    // A provider can register during setup's own auto-detection probes, before
+    // the subscription above is established; that `provider.updated` would be
+    // lost until the next session. One idempotent pass right after subscribing
+    // closes that window.
+    void reconcileAndReload()
 
     return async () => {
       controller.abort()
