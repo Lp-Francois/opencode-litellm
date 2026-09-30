@@ -178,6 +178,112 @@ describe('reasoning-effort discovery', () => {
   })
 })
 
+describe('restricted reasoning models', () => {
+  // LiteLLM's Pro entries omit supports_low_reasoning_effort, and older
+  // entries even report minimal=true despite the provider's restricted set.
+  const pro = {
+    supports_reasoning: true,
+    supports_none_reasoning_effort: false,
+    supports_minimal_reasoning_effort: true,
+    supports_xhigh_reasoning_effort: true,
+    reasoning_effort_levels: null,
+  }
+
+  it.each([
+    {
+      name: 'limits GPT-5.4 Pro to its accepted effort levels',
+      info: { ...pro, key: 'gpt-5.4-pro', supports_minimal_reasoning_effort: false },
+      params: {},
+      expected: ['medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'filters misleading positive minimal metadata for GPT-5.2 Pro',
+      info: { ...pro, key: 'gpt-5.2-pro' },
+      params: {},
+      expected: ['medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'limits GPT-5 Pro to high',
+      info: { ...pro, key: 'gpt-5-pro', supports_xhigh_reasoning_effort: false },
+      params: {},
+      expected: ['high'],
+    },
+    {
+      name: 'recognizes provider-prefixed snapshot keys behind deployment aliases',
+      info: { ...pro, key: 'azure/us/gpt-5.4-pro-2026-03-05' },
+      params: { model: 'azure/company-deployment' },
+      expected: ['medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'uses the upstream model when model_info has no key',
+      info: pro,
+      params: { model: 'openai/gpt-5.2-pro-2025-12-11' },
+      expected: ['medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'uses the upstream model when model_info key is a deployment alias',
+      info: { ...pro, key: 'company-reasoner' },
+      params: { model: 'openai/gpt-5-pro-2025-10-06' },
+      expected: ['high'],
+    },
+    {
+      name: 'honours disabled levels within the restricted set',
+      info: { ...pro, key: 'gpt-5.4-pro', supports_medium_reasoning_effort: false, supports_xhigh_reasoning_effort: false },
+      params: {},
+      expected: ['high'],
+    },
+    {
+      name: 'does not invent optional xhigh support from a model name',
+      info: { key: 'gpt-5.4-pro', supports_reasoning: true, supports_minimal_reasoning_effort: false },
+      params: {},
+      expected: ['medium', 'high'],
+    },
+    {
+      name: 'keeps explicit effort lists authoritative over known restrictions',
+      info: { ...pro, key: 'gpt-5.4-pro', reasoning_effort_levels: ['low', 'high'] },
+      params: {},
+      expected: ['low', 'high'],
+    },
+    {
+      name: 'keeps legacy effort lists authoritative over known restrictions',
+      info: { ...pro, key: 'gpt-5.2-pro', supports_reasoning_efforts: ['low'] },
+      params: {},
+      expected: ['low'],
+    },
+    {
+      name: 'preserves an explicit empty effort list on restricted models',
+      info: { ...pro, key: 'gpt-5.4-pro', reasoning_effort_levels: [] },
+      params: {},
+      expected: [],
+    },
+    {
+      name: 'does not apply Pro restrictions to ordinary GPT-5.4',
+      info: { ...pro, key: 'gpt-5.4' },
+      params: {},
+      expected: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'does not apply known restrictions to unrecognized Pro model suffixes',
+      info: { ...pro, key: 'gpt-5.4-pro-custom' },
+      params: {},
+      expected: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+    },
+    {
+      name: 'does not infer efforts from a known model name alone',
+      info: { key: 'gpt-5.4-pro', supports_reasoning: true },
+      params: {},
+      expected: undefined,
+    },
+  ])('$name', async ({ info, params, expected }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      data: [{ model_name: 'company-reasoner', model_info: info, litellm_params: params }],
+    })))
+
+    const discovered = await discoverLiteLLMModelInfo('https://proxy.example.com', 'test-key')
+    expect(discovered.get('company-reasoner')?.supports_reasoning_efforts).toEqual(expected)
+  })
+})
+
 describe('getRequestTimeoutMs', () => {
   it('defaults to 15000ms when the env var is unset', () => {
     expect(getRequestTimeoutMs()).toBe(15000)

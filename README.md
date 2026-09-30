@@ -225,6 +225,12 @@ reasoning support is unknown. Inferred variants are also suppressed when
 Metadata is read from `model_info`, falling back to `litellm_params` for
 missing/null values.
 
+When explicit effort lists are absent, known GPT-5 Pro restrictions also apply:
+GPT-5 Pro is limited to `high`, and GPT-5.2 Pro / GPT-5.4 Pro to `medium`, `high`,
+and explicitly supported `xhigh`. These restrictions use the upstream model key
+or `litellm_params.model`, including provider prefixes and dated snapshots, so
+deployment aliases work too. An explicit effort list can override this fallback.
+
 Each variant sets `reasoningEffort` to the reported level, so you can switch
 between effort levels from the model picker without hand-curating every entry.
 

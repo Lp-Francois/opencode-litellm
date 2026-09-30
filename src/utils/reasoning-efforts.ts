@@ -1,5 +1,28 @@
 import type { LiteLLMModelInfo } from '../types'
 
+// LiteLLM's sparse flags do not encode these provider restrictions reliably.
+// Constrain inference only; explicit deployment effort lists still win.
+// https://developers.openai.com/api/docs/models/gpt-5-pro
+// https://developers.openai.com/api/docs/models/gpt-5.2-pro
+// https://developers.openai.com/api/docs/models/gpt-5.4-pro
+const RESTRICTED_EFFORTS = new Map<string, readonly string[]>([
+  ['gpt-5-pro', ['high']],
+  ['gpt-5.2-pro', ['medium', 'high', 'xhigh']],
+  ['gpt-5.4-pro', ['medium', 'high', 'xhigh']],
+])
+
+function restrictedReasoningEfforts(...identifiers: unknown[]): readonly string[] | undefined {
+  for (const identifier of identifiers) {
+    if (typeof identifier !== 'string') continue
+    // Keys can include provider/region prefixes or dated OpenAI snapshots.
+    const model = identifier.split('/').pop()?.replace(/-\d{4}-\d{2}-\d{2}$/, '')
+    if (!model) continue
+    const efforts = RESTRICTED_EFFORTS.get(model)
+    if (efforts) return efforts
+  }
+  return undefined
+}
+
 /** Resolve discovery metadata without assuming every reasoning model accepts effort options. */
 export function resolveReasoningEfforts(
   info: LiteLLMModelInfo,
@@ -50,6 +73,13 @@ export function resolveReasoningEfforts(
   }
   for (const [effort, supported] of flags) {
     if (supported) efforts.add(effort)
+  }
+
+  const restricted = restrictedReasoningEfforts(metadata.key, params?.model)
+  if (restricted) {
+    for (const effort of efforts) {
+      if (!restricted.includes(effort)) efforts.delete(effort)
+    }
   }
 
   const order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']

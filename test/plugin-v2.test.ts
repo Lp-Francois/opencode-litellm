@@ -107,6 +107,20 @@ describe('OpenCode 2 plugin entrypoint', () => {
                   supported_openai_params: ['max_tokens', 'stream', 'web_search_options'],
                 },
               },
+              {
+                model_name: 'company-pro',
+                litellm_params: { model: 'openai/gpt-5.4-pro', use_responses_api: true },
+                model_info: {
+                  key: 'gpt-5.4-pro',
+                  mode: 'responses',
+                  supports_reasoning: true,
+                  supports_none_reasoning_effort: false,
+                  supports_minimal_reasoning_effort: false,
+                  supports_xhigh_reasoning_effort: true,
+                  reasoning_effort_levels: null,
+                  supported_openai_params: ['reasoning'],
+                },
+              },
             ],
           }),
           { status: 200 },
@@ -117,6 +131,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
           { id: 'anthropic/claude-3-5-sonnet', object: 'model' },
           { id: 'gpt-6-astra', object: 'model' },
           { id: 'gpt-5-search-api', object: 'model' },
+          { id: 'company-pro', object: 'model' },
         ] }),
         { status: 200 },
       )
@@ -177,7 +192,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(registered[0].info.settings).toMatchObject({
       baseURL: 'http://127.0.0.1:44444/v1',
     })
-    expect(registered[0].models).toHaveLength(3)
+    expect(registered[0].models).toHaveLength(4)
     expect(registered[0].models[0]).toMatchObject({
       id: 'anthropic/claude-3-5-sonnet',
       name: 'Claude 3.5 Sonnet',
@@ -210,6 +225,15 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(registered[0].models[2]).toMatchObject({
       id: 'gpt-5-search-api',
       variants: [],
+    })
+
+    expect(registered[0].models[3]).toMatchObject({
+      id: 'company-pro',
+      variants: [
+        { id: 'medium', settings: { reasoningEffort: 'medium' } },
+        { id: 'high', settings: { reasoningEffort: 'high' } },
+        { id: 'xhigh', settings: { reasoningEffort: 'xhigh' } },
+      ],
     })
 
     await cleanup?.()
