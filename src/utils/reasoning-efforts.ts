@@ -21,12 +21,23 @@ export function resolveReasoningEfforts(
     }
   }
 
+  // Some search models carry effort flags even though their request handler
+  // rejects reasoning altogether. Accept either chat or Responses API naming.
+  const supportedParams = metadata.supported_openai_params
+  if (
+    Array.isArray(supportedParams) &&
+    !supportedParams.includes('reasoning_effort') &&
+    !supportedParams.includes('reasoning')
+  ) return []
+
   const flags = new Map<string, boolean>()
   for (const [key, value] of Object.entries(metadata)) {
     const match = key.match(/^supports_([a-z]+)_reasoning_effort$/)
     if (match && typeof value === 'boolean') flags.set(match[1], value)
   }
   if (flags.size === 0) return undefined
+  // Negative flags only rule out levels; they do not establish reasoning support.
+  if (metadata.supports_reasoning !== true && ![...flags.values()].includes(true)) return undefined
 
   // LiteLLM's per-level flags are sparse: medium/high have no standard flags,
   // and low is opt-out. Requiring an explicit true hides these baseline levels

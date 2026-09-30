@@ -219,8 +219,11 @@ Otherwise, per-level `supports_*_reasoning_effort` flags enable discovery:
 optional levels such as `none`, `minimal`, `xhigh`, and `max` require an explicit
 `true`. This handles sparse metadata such as GPT-6 Astra's `xhigh`/`max` flags
 without losing its baseline levels. No levels are inferred from
-`supports_reasoning: true` alone. Metadata is read from `model_info`, falling
-back to `litellm_params` for missing/null values.
+`supports_reasoning: true` alone, or from negative-only effort flags when
+reasoning support is unknown. Inferred variants are also suppressed when
+`supported_openai_params` lists neither `reasoning_effort` nor `reasoning`.
+Metadata is read from `model_info`, falling back to `litellm_params` for
+missing/null values.
 
 Each variant sets `reasoningEffort` to the reported level, so you can switch
 between effort levels from the model picker without hand-curating every entry.

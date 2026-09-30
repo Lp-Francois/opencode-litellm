@@ -96,6 +96,17 @@ describe('OpenCode 2 plugin entrypoint', () => {
                   reasoning_effort_levels: null,
                 },
               },
+              {
+                model_name: 'gpt-5-search-api',
+                model_info: {
+                  key: 'gpt-5-search-api',
+                  supports_reasoning: null,
+                  supports_minimal_reasoning_effort: true,
+                  supports_none_reasoning_effort: false,
+                  supports_xhigh_reasoning_effort: false,
+                  supported_openai_params: ['max_tokens', 'stream', 'web_search_options'],
+                },
+              },
             ],
           }),
           { status: 200 },
@@ -105,6 +116,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
         JSON.stringify({ data: [
           { id: 'anthropic/claude-3-5-sonnet', object: 'model' },
           { id: 'gpt-6-astra', object: 'model' },
+          { id: 'gpt-5-search-api', object: 'model' },
         ] }),
         { status: 200 },
       )
@@ -165,7 +177,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(registered[0].info.settings).toMatchObject({
       baseURL: 'http://127.0.0.1:44444/v1',
     })
-    expect(registered[0].models).toHaveLength(2)
+    expect(registered[0].models).toHaveLength(3)
     expect(registered[0].models[0]).toMatchObject({
       id: 'anthropic/claude-3-5-sonnet',
       name: 'Claude 3.5 Sonnet',
@@ -193,6 +205,11 @@ describe('OpenCode 2 plugin entrypoint', () => {
         { id: 'xhigh', settings: { reasoningEffort: 'xhigh' } },
         { id: 'max', settings: { reasoningEffort: 'max' } },
       ],
+    })
+
+    expect(registered[0].models[2]).toMatchObject({
+      id: 'gpt-5-search-api',
+      variants: [],
     })
 
     await cleanup?.()
