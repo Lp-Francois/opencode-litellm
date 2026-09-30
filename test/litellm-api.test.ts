@@ -1,10 +1,118 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { buildAPIURL, getRequestTimeoutMs, normalizeBaseURL } from '../src/utils/litellm-api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildAPIURL, discoverLiteLLMModelInfo, getRequestTimeoutMs, normalizeBaseURL } from '../src/utils/litellm-api'
 
 const TIMEOUT_ENV = 'LITELLM_REQUEST_TIMEOUT_MS'
 
 afterEach(() => {
   delete process.env[TIMEOUT_ENV]
+  vi.unstubAllGlobals()
+})
+
+describe('reasoning-effort discovery', () => {
+  const astra = {
+    key: 'bedrock_mantle/openai.gpt-6-astra',
+    supports_reasoning: true,
+    supports_max_reasoning_effort: true,
+    supports_xhigh_reasoning_effort: true,
+    supports_none_reasoning_effort: false,
+    supports_minimal_reasoning_effort: false,
+    supports_low_reasoning_effort: null,
+    reasoning_effort_levels: null,
+  }
+
+  it.each([
+    {
+      name: 'restores baseline levels from sparse Astra metadata',
+      info: astra,
+      params: {},
+      expected: ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    {
+      name: 'reads sparse flags from litellm_params',
+      info: { supports_reasoning: true },
+      params: astra,
+      expected: ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    {
+      name: 'honours explicit lists without adding baseline levels or flagged extras',
+      info: { ...astra, reasoning_effort_levels: ['low', 'high', 'max'] },
+      params: {},
+      expected: ['low', 'high', 'max'],
+    },
+    {
+      name: 'honours an explicitly empty list',
+      info: { ...astra, reasoning_effort_levels: [] },
+      params: {},
+      expected: [],
+    },
+    {
+      name: 'preserves the existing explicit-list format',
+      info: { ...astra, supports_reasoning_efforts: ['high'] },
+      params: {},
+      expected: ['high'],
+    },
+    {
+      name: 'reads explicit lists from params when model_info is null',
+      info: astra,
+      params: { reasoning_effort_levels: ['high'] },
+      expected: ['high'],
+    },
+    {
+      name: 'model_info false overrides params true',
+      info: { ...astra, supports_low_reasoning_effort: false, supports_xhigh_reasoning_effort: false },
+      params: { supports_low_reasoning_effort: true, supports_xhigh_reasoning_effort: true },
+      expected: ['medium', 'high', 'max'],
+    },
+    {
+      name: 'null flags fall back to params',
+      info: astra,
+      params: { supports_low_reasoning_effort: false },
+      expected: ['medium', 'high', 'xhigh', 'max'],
+    },
+    {
+      name: 'does not invent levels for reasoning models without effort metadata',
+      info: { supports_reasoning: true, supports_low_reasoning_effort: null },
+      params: {},
+      expected: undefined,
+    },
+    {
+      name: 'does not invent levels for unknown models',
+      info: {},
+      params: {},
+      expected: undefined,
+    },
+    {
+      name: 'explicitly disabled reasoning overrides lists and flags',
+      info: { ...astra, supports_reasoning: false, reasoning_effort_levels: ['high'] },
+      params: { supports_reasoning: true },
+      expected: [],
+    },
+    {
+      name: 'keeps optional levels opt-in and retains custom positive flags',
+      info: { supports_high_reasoning_effort: true, supports_ultra_reasoning_effort: true },
+      params: {},
+      expected: ['low', 'medium', 'high', 'ultra'],
+    },
+    {
+      name: 'includes explicitly supported none and minimal in stable order',
+      info: { supports_minimal_reasoning_effort: true, supports_none_reasoning_effort: true },
+      params: {},
+      expected: ['none', 'minimal', 'low', 'medium', 'high'],
+    },
+    {
+      name: 'filters malformed list members and removes duplicates',
+      info: { reasoning_effort_levels: ['high', null, 1, 'high', 'low'] },
+      params: {},
+      expected: ['high', 'low'],
+    },
+  ])('$name', async ({ info, params, expected }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      data: [{ model_name: 'test-model', model_info: info, litellm_params: params }],
+    })))
+
+    const discovered = await discoverLiteLLMModelInfo('https://proxy.example.com', 'test-key')
+    expect(discovered.get('test-model')?.supports_reasoning_efforts).toEqual(expected)
+  })
 })
 
 describe('getRequestTimeoutMs', () => {

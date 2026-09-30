@@ -1,0 +1,49 @@
+import type { LiteLLMModelInfo } from '../types'
+
+/** Resolve discovery metadata without assuming every reasoning model accepts effort options. */
+export function resolveReasoningEfforts(
+  info: LiteLLMModelInfo,
+  params?: Record<string, unknown>,
+): string[] | undefined {
+  const metadata: Record<string, unknown> = { ...params }
+  for (const [key, value] of Object.entries(info)) {
+    if (value != null) metadata[key] = value
+  }
+
+  if (metadata.supports_reasoning === false) return []
+
+  // Explicit lists are authoritative, including an empty list. In particular,
+  // reasoning_effort_levels can describe models that do not accept medium.
+  for (const key of ['reasoning_effort_levels', 'supports_reasoning_efforts']) {
+    const levels = metadata[key]
+    if (Array.isArray(levels)) {
+      return [...new Set(levels.filter((level): level is string => typeof level === 'string'))]
+    }
+  }
+
+  const flags = new Map<string, boolean>()
+  for (const [key, value] of Object.entries(metadata)) {
+    const match = key.match(/^supports_([a-z]+)_reasoning_effort$/)
+    if (match && typeof value === 'boolean') flags.set(match[1], value)
+  }
+  if (flags.size === 0) return undefined
+
+  // LiteLLM's per-level flags are sparse: medium/high have no standard flags,
+  // and low is opt-out. Requiring an explicit true hides these baseline levels
+  // on models such as GPT-6 Astra, whose only positive flags are xhigh/max.
+  // Keep optional levels opt-in rather than guessing none/minimal support.
+  // See litellm/router_utils/reasoning_effort_capability.py upstream.
+  const efforts = new Set<string>()
+  for (const effort of ['low', 'medium', 'high']) {
+    if (flags.get(effort) !== false) efforts.add(effort)
+  }
+  for (const [effort, supported] of flags) {
+    if (supported) efforts.add(effort)
+  }
+
+  const order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  return [
+    ...order.filter((effort) => efforts.has(effort)),
+    ...[...efforts].filter((effort) => !order.includes(effort)),
+  ]
+}
